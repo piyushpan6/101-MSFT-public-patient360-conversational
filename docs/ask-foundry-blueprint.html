@@ -114,11 +114,12 @@ ol li,ul li{margin:4px 0}
 <tr><td>7</td><td>Open a PR to Sanjay's repo (only after your review)</td><td>Sanjay reviews</td></tr>
 </table>
 
-<h2>7. Open questions for you and Sanjay</h2>
+<h2>7. Decisions (Piyush, Nov 20)</h2>
 <ul>
- <li>Which Azure subscription or tenant hosts the Foundry project: your demo tenant or Sanjay's? This affects the relay's managed identity.</li>
- <li>Do we have write access to his repo, or should it be a fork plus PR? Locally the branch exists only on this machine and hasn't been pushed.</li>
- <li>Sanjay renames the current tab to "Ask (GHCP)". Should our branch do the rename too, to avoid a merge conflict?</li>
- <li>Should Foundry chats share the History panel with GHCP chats, with a badge on each, or keep separate lists?</li>
+ <li><b>Foundry project:</b> the demo tenant (MngEnvMCAP635415). Tenant-specific values live in env or settings files only and are never committed, because the fork is public.</li>
+ <li><b>Repo:</b> fork <code>piyushpan6/101-MSFT-public-patient360-conversational</code>, branch <code>piyush/ask-foundry</code>. PR to Sanjay's main later. Pushing to upstream is disabled locally.</li>
+ <li><b>Tab names:</b> this branch renames the current tab to <span class="tag ghcp">Ask (GHCP)</span> and adds <span class="tag fdy">Ask (Foundry)</span>.</li>
+ <li><b>History:</b> one shared list, with a GHCP or Foundry badge on each chat.</li>
+ <li><b>Windows:</b> the repo's commands assume a Mac (<code>.venv/bin/python</code>). Windows equivalents are used locally, and packages come only from the internal Microsoft package feed.</li>
 </ul>
 </main></body></html>
