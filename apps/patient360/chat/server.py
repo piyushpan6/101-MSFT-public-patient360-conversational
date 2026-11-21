@@ -60,6 +60,7 @@ from starlette.routing import Route
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
+import foundry  # noqa: E402
 import rules  # noqa: E402
 import tools  # noqa: E402
 
@@ -94,6 +95,9 @@ class Chat:
     used: float = field(default_factory=time.time)
     busy: bool = False
     seed: str = ""                                  # an earlier conversation, for a session that couldn't be resumed
+    backend: str = "ghcp"                           # ghcp: the Copilot SDK; foundry: chat/foundry.py
+    prev: str | None = None                         # foundry: the last response id, which carries the conversation
+    task: asyncio.Task | None = None                # foundry: the answer being written
 
     def emit(self, event: dict) -> None:
         if self.queue:
@@ -142,30 +146,45 @@ def numbered(text: str, n: int) -> str:
         "under the card, so you may show other cards first. End the answer with [[summary]] and 1-3 sentences.")
 
 
-async def run_tool(inv: ToolInvocation) -> ToolResult:
-    """Every tool runs in the page that asked; display tools are numbered as figures for the narrative."""
-    chat = by_session.get(inv.session_id)
-    spec = tools.TOOL_BY_NAME.get(inv.tool_name)
-    args = dict(inv.arguments or {})
-    if not chat or not spec:
-        return ToolResult(text_result_for_llm="This conversation is closed.", result_type="failure")
+async def page_tool(chat: Chat, call_id: str, name: str, args: dict) -> tuple[bool, str]:
+    """Runs one tool in the page that asked (both backends); display tools are numbered as figures."""
+    spec = tools.TOOL_BY_NAME.get(name)
+    if not spec:
+        return False, f"{name}: there is no such tool. Use only the tools listed."
     n = None
     if spec["kind"] == "display":
         replace = args.get("replace")
         replace = int(replace) if str(replace).strip().isdigit() else None
-        n = chat.figure_number({"title": args.get("title"), "template": inv.tool_name,
+        n = chat.figure_number({"title": args.get("title"), "template": name,
                                 "fields": {k: v for k, v in args.items() if k not in ("title", "replace")}}, replace)
     try:
-        result = await chat.page_call("tool", {"call_id": inv.tool_call_id, "name": inv.tool_name, "args": args, "fig": n})
+        result = await chat.page_call("tool", {"call_id": call_id, "name": name, "args": args, "fig": n})
     except RuntimeError as e:
-        return ToolResult(text_result_for_llm=str(e), result_type="failure")
+        return False, str(e)
     text = str(result.get("text") or result.get("error") or "")
     if not result.get("ok"):
-        return ToolResult(text_result_for_llm=f"{inv.tool_name}: {text or 'failed'}. Correct the call and try again; "
-                          "don't mention this in your reply.", result_type="failure")
+        return False, f"{name}: {text or 'failed'}. Correct the call and try again; don't mention this in your reply."
     if n is not None:
         text = numbered(text, n)
-    return ToolResult(text_result_for_llm=text[:200_000])
+    return True, text[:200_000]
+
+
+async def run_tool(inv: ToolInvocation) -> ToolResult:
+    """Copilot's handler for every tool: runs it in the page."""
+    chat = by_session.get(inv.session_id)
+    if not chat or inv.tool_name not in tools.TOOL_BY_NAME:
+        return ToolResult(text_result_for_llm="This conversation is closed.", result_type="failure")
+    ok, text = await page_tool(chat, inv.tool_call_id, inv.tool_name, dict(inv.arguments or {}))
+    return ToolResult(text_result_for_llm=text) if ok else ToolResult(text_result_for_llm=text, result_type="failure")
+
+
+async def foundry_tool(chat: Chat, call_id: str, name: str, args: dict) -> tuple[bool, str]:
+    """Foundry's tool calls: the page's trace events the Copilot runtime would send, around the same page call."""
+    chat.emit({"type": "tool", "id": call_id, "name": name, "title": args.get("title"), "args": trace_args(args)})
+    ok, text = await page_tool(chat, call_id, name, args)
+    chat.emit({"type": "tool_done", "id": call_id, "ok": ok, "error": None if ok else text,
+               "result": _clip(text.split("\nThis is figure ")[0].strip())})
+    return ok, text
 
 
 TOOLS = [Tool(name=t["name"], description=t["description"], parameters=t["parameters"], handler=run_tool,
@@ -288,6 +307,10 @@ async def close_chat(chat: Chat) -> None:
     by_session.pop(getattr(chat.session, "session_id", ""), None)
     for future in chat.pending.values():
         future.cancel()
+    if chat.task and not chat.task.done():
+        chat.task.cancel()
+    if chat.session is None:
+        return
     with contextlib.suppress(Exception):
         await chat.session.disconnect()
 
@@ -420,6 +443,8 @@ class Who:
 
 async def who(req: Request) -> Who | JSONResponse:
     """The caller, signed in to Copilot; or the error response to send instead."""
+    if req.headers.get("x-backend") == "foundry" or req.query_params.get("backend") == "foundry":
+        return foundry_who(req)
     if RELAY:
         ticket = verify_ticket(req.headers.get("x-chat-ticket"))
         if not ticket:
@@ -437,12 +462,32 @@ async def who(req: Request) -> Who | JSONResponse:
     return Who(account["id"], {"github_token": account["token"]}, pick, account["login"])
 
 
+def foundry_who(req: Request) -> Who | JSONResponse:
+    """Ask (Foundry) callers: no GitHub sign-in (the model runs on this server's Entra identity). In the relay, the
+    Fabric user's chat ticket; locally, this computer's user."""
+    if not foundry.enabled():
+        return fail("Ask (Foundry) is not set up on this server: set FOUNDRY_ENDPOINT and FOUNDRY_MODELS.", 503, "foundry")
+    if RELAY:
+        ticket = verify_ticket(req.headers.get("x-chat-ticket"))
+        if not ticket:
+            return fail("The chat ticket is missing or has expired; reload the page.", 401, "ticket")
+        return Who("foundry:" + ticket["oid"], {}, None, "Foundry", ticket.get("upn"))
+    return Who("foundry:local", {}, None, "Foundry")
+
+
 # --- API -------------------------------------------------------------------------------------------------------------
 async def api_health(_):
-    return JSONResponse({"ok": True, "mode": "relay" if RELAY else "local", "chats": len(chats)})
+    return JSONResponse({"ok": True, "mode": "relay" if RELAY else "local", "chats": len(chats),
+                         "backends": ["ghcp", *(["foundry"] if foundry.enabled() else [])]})
 
 
 async def api_me(req: Request):
+    if req.query_params.get("backend") == "foundry":
+        caller = foundry_who(req)
+        if isinstance(caller, JSONResponse):
+            return caller
+        return JSONResponse({"mode": "relay" if RELAY else "local", "backend": "foundry", "user": caller.user,
+                             "github": {"login": "Foundry"}, "foundry": {"endpoint": foundry.ENDPOINT}})
     if RELAY:
         ticket = verify_ticket(req.headers.get("x-chat-ticket"))
         if not ticket:
@@ -519,6 +564,8 @@ async def api_models(req: Request):
     caller = await who(req)
     if isinstance(caller, JSONResponse):
         return caller
+    if caller.owner.startswith("foundry:"):
+        return JSONResponse({**foundry.models(), "login": caller.login})
     seen, out = set(), []
     for m in (await client.rpc.models.list(caller.models)).models:
         if m.id not in seen:
@@ -555,6 +602,11 @@ async def api_chat(req: Request):
         chat = None
     if chat and chat.busy:
         return fail("Copilot is still answering the last question; stop it first.", 409)
+    if caller.owner.startswith("foundry:"):
+        model = body.get("model") if body.get("model") in foundry.MODELS else foundry.MODELS[0]
+        return StreamingResponse(foundry_stream(caller, body, chat, surface, model, effort, prompt),
+                                 media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     async def stream():
         nonlocal chat
@@ -605,6 +657,63 @@ async def api_chat(req: Request):
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
+async def foundry_stream(caller: Who, body: dict, chat: Chat | None, surface: str, model: str, effort: str | None,
+                         prompt: str):
+    """Ask (Foundry): the same NDJSON stream as the Copilot path; chat/foundry.py writes the answer."""
+    finished = False
+    try:
+        resume = body.get("resume") if isinstance(body.get("resume"), dict) else None
+        if chat is None or (chat.model, chat.effort) != (model, effort):
+            prev = chat.prev if chat else None
+            if chat:
+                await close_chat(chat)
+            chat = Chat(caller.owner, surface, model, effort, loop=asyncio.get_running_loop(), backend="foundry")
+            chat.prev = prev
+            if resume and not prev:
+                chat.seed = str(resume.get("transcript") or "")[-TRANSCRIPT_LIMIT:]
+            chats[chat.id] = chat
+        chat.queue, chat.figs, chat.used, chat.busy = asyncio.Queue(), [], time.time(), True
+        yield json.dumps({"type": "chat", "chat_id": chat.id, "session_id": None, "model": model,
+                          "effort": effort, "backend": "foundry"}) + "\n"
+        send = prompt
+        if chat.seed:
+            send = ("(This conversation was saved and reopened. What was asked and answered before:)\n"
+                    f"{chat.seed}\n\n(The conversation continues with this question.)\n\n{prompt}")
+            chat.seed = ""
+
+        async def answer():
+            try:
+                await foundry.run_turn(chat, send, foundry_tool)
+                chat.emit({"type": "done"})
+            except asyncio.CancelledError:
+                chat.emit({"type": "done", "aborted": True})
+            except Exception as e:  # noqa: BLE001 (shown in the chat)
+                chat.emit({"type": "error", "text": f"{type(e).__name__}: {e}"})
+
+        chat.task = asyncio.create_task(answer())
+        while True:
+            try:
+                ev = await asyncio.wait_for(chat.queue.get(), KEEPALIVE)
+            except asyncio.TimeoutError:
+                yield '{"type": "ping"}\n'
+                continue
+            yield json.dumps(ev, default=str) + "\n"
+            if ev["type"] in ("done", "error"):
+                finished = True
+                break
+    except Exception as e:  # noqa: BLE001
+        finished = True
+        yield json.dumps({"type": "error", "text": f"{type(e).__name__}: {e}"}) + "\n"
+    finally:
+        if chat:
+            chat.used, chat.busy = time.time(), False
+            if not finished:
+                for future in chat.pending.values():
+                    future.cancel()
+            if chat.task and not chat.task.done():
+                chat.task.cancel()
+
+
 async def api_tool_result(req: Request):
     """The page's answer to a page_request: {chat_id, id, ok, text | rows | error}."""
     caller = await who(req)
@@ -628,6 +737,8 @@ async def api_stop(req: Request):
     if chat and chat.owner == caller.owner:
         for future in chat.pending.values():
             future.cancel()
+        if chat.task and not chat.task.done():
+            chat.task.cancel()
         with contextlib.suppress(Exception):
             await chat.session.abort()
         chat.emit({"type": "done", "aborted": True})
