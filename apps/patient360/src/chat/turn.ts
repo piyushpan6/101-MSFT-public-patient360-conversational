@@ -49,6 +49,8 @@ export type Turn = {
   t1?: number;
   /** A saved answer: when it was answered. */
   when?: string;
+  /** Who answered: 'foundry' for Ask (Foundry), with its model; unset for GitHub Copilot. */
+  by?: { backend: 'foundry'; model: string | null };
   /** What is kept of the stream, to save it and draw it again. */
   events: ChatEvent[];
 };
@@ -266,6 +268,7 @@ export function driveTurn(turn: Turn, deps: DriverDeps) {
       });
     switch (ev.type) {
       case 'chat':
+        if (ev.backend === 'foundry') turn.by = { backend: 'foundry', model: (ev.model as string) ?? null };
         deps.onChat?.(ev);
         break;
       case 'delta': {

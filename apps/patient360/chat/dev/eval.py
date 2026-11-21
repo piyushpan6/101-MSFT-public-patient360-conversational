@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases import CASES  # noqa: E402
 
 BASE = "http://localhost:5178"
+# --backend foundry asks on the Ask (Foundry) tab (side panel cases stay on Copilot, as the app does).
+ASK_PATH = "/ask"
 TURN_TIMEOUT = 420
 WHOLE = False
 
@@ -306,7 +308,7 @@ async def run_case(browser, case: dict, out: Path, sem: asyncio.Semaphore) -> di
                     await ask(page, case["then"], 2)
                     res["turns"].append(await read_turn(page, 2, ".ask-log", out, f"{case['id']}-t2"))
             else:
-                await page.goto(f"{BASE}/ask")
+                await page.goto(f"{BASE}{ASK_PATH}")
                 await page.wait_for_selector(".ask-dock textarea:not([disabled])", timeout=30000)
                 qs = case["q"] if isinstance(case["q"], list) else [case["q"]]
                 for i, q in enumerate(qs):
@@ -369,9 +371,12 @@ async def main() -> None:
     ap.add_argument("--answers", action="store_true", help="also save each whole answer as a PNG")
     ap.add_argument("--gpu", action="store_true",
                     help="draw WebGL on the Mac's GPU (Metal); the tractography and fluorescence slides need it")
+    ap.add_argument("--backend", choices=["ghcp", "foundry"], default="ghcp",
+                    help="the Ask tab to ask on: Ask (GHCP) or Ask (Foundry)")
     a = ap.parse_args()
-    global WHOLE
+    global WHOLE, ASK_PATH
     WHOLE = a.answers
+    ASK_PATH = "/ask/foundry" if a.backend == "foundry" else "/ask"
     pick = [s for s in a.only.split(",") if s]
     cases = [c for c in CASES if not pick or any(c["id"] == p or c["id"].startswith(p) for p in pick)]
     out = Path(a.out)

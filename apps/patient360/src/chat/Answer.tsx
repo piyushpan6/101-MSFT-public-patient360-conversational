@@ -158,18 +158,21 @@ export function Answer({ turn, onAddPatients }: { turn: Turn; onAddPatients?: (r
     if (m?.text) out.push(<Md key={item.id} className={`ans-text${m.summary && hasSlots ? ' ans-summary' : ''}`} text={m.text} />);
   }
   showLead('end');
+  // Who answered: Foundry turns are marked from their chat event (saved ones from the chat's model, foundry/<model>).
+  const byFoundry = turn.by?.backend === 'foundry';
+  const by = byFoundry ? `Microsoft Foundry${turn.by?.model ? ` · ${turn.by.model}` : ''}` : 'GitHub Copilot';
 
   return (
     <div className="ans">
       <div className="ans-head">
-        <span className="ans-by">GitHub Copilot</span>
+        <span className="ans-by">{by}</span>
         {turn.when && <span className="ans-when">{whenText(turn.when)}</span>}
         {visibleSteps.length > 0 && (
           <button
             type="button"
             className="ans-steps-toggle"
             aria-expanded={traceOpen}
-            title="How Copilot answered: its reasoning, each step and what it returned"
+            title={`How ${byFoundry ? 'the model' : 'Copilot'} answered: its reasoning, each step and what it returned`}
             onClick={() => {
               setTraceOpen((v) => {
                 localStorage.setItem(TRACE_KEY, v ? '0' : '1');

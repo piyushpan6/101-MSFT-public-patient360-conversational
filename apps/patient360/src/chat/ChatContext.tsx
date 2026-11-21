@@ -513,6 +513,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
         turn.when = t.created_at;
         turn.events = t.events;
+        if (b === 'foundry') turn.by = { backend: 'foundry', model: (chat.model ?? '').slice(FOUNDRY_PREFIX.length) || null };
         const driver = driveTurn(turn, {
           replay: true,
           runTool: (name, args) => runTool(name, args, ctxFor(c)),
