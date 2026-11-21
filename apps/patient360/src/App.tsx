@@ -91,6 +91,7 @@ function App() {
           <Route index element={<Patients />} />
           <Route path="p/:id" element={<Patients />} />
           <Route path="ask" element={<Ask />} />
+          <Route path="ask/foundry" element={<Ask backend="foundry" />} />
           <Route path="data" element={<DataMap />} />
           <Route path="sources" element={<Sources />} />
         </Route>

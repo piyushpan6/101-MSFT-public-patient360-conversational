@@ -7,7 +7,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { runTool, type ToolCtx } from '@/chat/tools';
-import { ask, chatApi, ChatError, CHAT_AVAILABLE, historyApi, type Me, type Model } from '@/chat/transport';
+import { ask, chatApi, ChatError, CHAT_AVAILABLE, historyApi, type Backend, type Me, type Model } from '@/chat/transport';
 import { answerText, driveTurn, newTurn, type Turn } from '@/chat/turn';
 import { useCohort } from '@/hooks/useCohort';
 import { str, type PatientBundle } from '@/lib/api';
@@ -25,6 +25,8 @@ export type PanelContext = {
 };
 export type Conversation = {
   surface: Surface;
+  /** Who answers: GitHub Copilot or the Foundry deployment (the side panel is always Copilot). */
+  backend: Backend;
   chatId: string | null;
   sessionId: string | null;
   model: string | null;
@@ -47,17 +49,21 @@ export type Conversation = {
 const SETTINGS_KEY = 'p360.chat';
 const HISTORY_OFF = 'p360.chat.history'; // '0': don't keep (chat/dev/eval.py)
 type Settings = { model: string | null; effort: string | null };
-const readSettings = (): Settings => {
+const settingsKey = (b: Backend) => (b === 'foundry' ? `${SETTINGS_KEY}.foundry` : SETTINGS_KEY);
+const readSettings = (b: Backend = 'ghcp'): Settings => {
   try {
     return {
       model: null,
       effort: null,
-      ...(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<Settings>),
+      ...(JSON.parse(localStorage.getItem(settingsKey(b)) ?? '{}') as Partial<Settings>),
     };
   } catch {
     return { model: null, effort: null };
   }
 };
+/** Saved chats keep their backend in the model column ("foundry/gpt-5.5"), so history needs no new column. */
+export const FOUNDRY_PREFIX = 'foundry/';
+export const savedBackend = (model: string | null | undefined): Backend => (model?.startsWith(FOUNDRY_PREFIX) ? 'foundry' : 'ghcp');
 const newId = () =>
   crypto.randomUUID
     ? crypto.randomUUID().replace(/-/g, '')
@@ -78,6 +84,11 @@ function transcript(turns: Turn[]): string {
 
 interface ChatState {
   available: boolean;
+  /** The backend of the Ask tab's conversation: Ask (GHCP) or Ask (Foundry). */
+  backend: Backend;
+  setBackend: (b: Backend) => void;
+  /** The backends this chat server offers. */
+  backends: Backend[];
   me: Me | null;
   meError: string | null;
   models: Model[];
@@ -92,8 +103,8 @@ interface ChatState {
   removePatient: (s: Surface, id: string) => void;
   /** The side panel's conversation, moved into the Ask tab. */
   continueInAsk: () => void;
-  /** Opens a saved chat in the Ask tab. */
-  openSaved: (id: string) => Promise<void>;
+  /** Opens a saved chat in the Ask tab; resolves to the backend it was asked on. */
+  openSaved: (id: string) => Promise<Backend>;
   /** Bumped whenever a chat is saved, so the list of chats reloads. */
   historyVersion: number;
   historyChanged: () => void;
@@ -106,9 +117,10 @@ interface ChatState {
 
 const Ctx = createContext<ChatState | undefined>(undefined);
 
-function newConversation(surface: Surface): Conversation {
+function newConversation(surface: Surface, backend: Backend = 'ghcp'): Conversation {
   return {
     surface,
+    backend,
     chatId: null,
     sessionId: null,
     model: null,
@@ -143,28 +155,46 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     requestAnimationFrame(flush);
     window.setTimeout(flush, 150);
   }, []);
-  const [me, setMe] = useState<Me | null>(null);
-  const [meError, setMeError] = useState<string | null>(null);
-  const [models, setModels] = useState<Model[]>([]);
-  const [settings, setSettingsState] = useState<Settings>(readSettings);
+  // Ask (GHCP) and Ask (Foundry) each keep a sign-in, models and choice; the Ask tab shows the one it is on.
+  const [backend, setBackendState] = useState<Backend>('ghcp');
+  const [backends, setBackends] = useState<Backend[]>(['ghcp']);
+  const [meBy, setMeBy] = useState<Record<Backend, Me | null>>({ ghcp: null, foundry: null });
+  const [meErrorBy, setMeErrorBy] = useState<Record<Backend, string | null>>({ ghcp: null, foundry: null });
+  const [modelsBy, setModelsBy] = useState<Record<Backend, Model[]>>({ ghcp: [], foundry: [] });
+  const [settingsBy, setSettingsBy] = useState<Record<Backend, Settings>>(() => ({
+    ghcp: readSettings('ghcp'),
+    foundry: readSettings('foundry'),
+  }));
+  const me = meBy[backend];
+  const meError = meErrorBy[backend];
+  const models = modelsBy[backend];
+  const settings = settingsBy[backend];
+  const setMe = (b: Backend, m: Me | null) => setMeBy((cur) => ({ ...cur, [b]: m }));
+  const setMeError = (b: Backend, e: string | null) => setMeErrorBy((cur) => ({ ...cur, [b]: e }));
+  // The other backend's Ask conversation, kept while the tab shows this one.
+  const parked = useRef<Partial<Record<Backend, Conversation>>>({});
   const [panel, setPanel] = useState<{
     open: boolean;
     context: PanelContext | null;
   }>({ open: false, context: null });
   const names = useRef(new Map<string, string>());
 
-  const setSettings = useCallback((s: Partial<Settings>) => {
-    setSettingsState((cur) => {
-      const next = { ...cur, ...s };
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
+  const setSettings = useCallback(
+    (s: Partial<Settings>) => {
+      setSettingsBy((all) => {
+        const next = { ...all[backend], ...s };
+        localStorage.setItem(settingsKey(backend), JSON.stringify(next));
+        return { ...all, [backend]: next };
+      });
+    },
+    [backend]
+  );
 
-  const loadModels = useCallback(async () => {
+  const loadModels = useCallback(async (b: Backend) => {
     try {
-      const r = await chatApi.models();
-      setSettingsState((cur) => {
+      const r = await chatApi.models(b);
+      setSettingsBy((all) => {
+        const cur = all[b];
         const model = cur.model && r.models.some((m) => m.id === cur.model) ? cur.model : r.default;
         const m = r.models.find((x) => x.id === model);
         const effort =
@@ -175,38 +205,61 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 ? r.default_effort
                 : (m.default_effort ?? null)
             : null;
-        return { model, effort };
+        return { ...all, [b]: { model, effort } };
       });
-      setModels(r.models);
+      setModelsBy((cur) => ({ ...cur, [b]: r.models }));
     } catch (e) {
-      setMeError(e instanceof Error ? e.message : String(e));
+      setMeError(b, e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  const loadMe = useCallback(async () => {
-    if (!CHAT_AVAILABLE) return;
-    try {
-      const m = await chatApi.me();
-      setMe(m);
-      setMeError(null);
-      if (m.github) await loadModels();
-    } catch (e) {
-      setMeError(e instanceof Error ? e.message : String(e));
-    }
-  }, [loadModels]);
+  const loadMe = useCallback(
+    async (b: Backend = 'ghcp') => {
+      if (!CHAT_AVAILABLE) return;
+      try {
+        const m = await chatApi.me(b);
+        setMe(b, m);
+        setMeError(b, null);
+        if (m.github) await loadModels(b);
+      } catch (e) {
+        setMeError(b, e instanceof Error ? e.message : String(e));
+      }
+    },
+    [loadModels]
+  );
 
   useEffect(() => {
-    void loadMe();
+    void loadMe('ghcp');
+    chatApi
+      .backends()
+      .then((b) => {
+        setBackends(b);
+        if (b.includes('foundry')) void loadMe('foundry');
+      })
+      .catch(() => undefined);
   }, [loadMe]);
+
+  const setBackend = useCallback((b: Backend) => {
+    setBackendState((cur) => {
+      if (cur === b) return cur;
+      const a = convs.current.ask;
+      if (a.backend !== b) {
+        parked.current[a.backend] = a;
+        convs.current.ask = parked.current[b] ?? newConversation('ask', b);
+        delete parked.current[b];
+      }
+      return b;
+    });
+  }, []);
 
   const signIn = useCallback(
     async (accountId?: string) => {
       try {
         if (accountId) await chatApi.signin(accountId);
         else await chatApi.githubSignIn();
-        await loadMe();
+        await loadMe('ghcp');
       } catch (e) {
-        setMeError(e instanceof Error ? e.message : String(e));
+        setMeError('ghcp', e instanceof Error ? e.message : String(e));
       }
     },
     [loadMe]
@@ -281,7 +334,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           {
             origin: saved.origin,
             session_id: c.sessionId,
-            model: c.model,
+            model: c.backend === 'foundry' && c.model ? `${FOUNDRY_PREFIX}${c.model}` : c.model,
             folder_id: saved.folderId,
             title,
             patients: c.patients,
@@ -311,6 +364,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const c = convs.current[surface];
       const question = text.trim();
       if (c.busy || !question) return;
+      const b = c.backend;
+      const chosen = settingsBy[b];
       const turn = newTurn(question, opts);
       c.turns.push(turn);
       c.busy = true;
@@ -320,7 +375,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const driver = driveTurn(turn, {
         runTool: (name, args) => runTool(name, args, ctxFor(c)),
         post: (id, reply) => {
-          if (c.chatId) chatApi.toolResult(c.chatId, id, reply).catch(() => undefined);
+          if (c.chatId) chatApi.toolResult(c.chatId, id, reply, b).catch(() => undefined);
         },
         label,
         render,
@@ -340,14 +395,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             message: question,
             surface,
             chat_id: c.chatId,
-            model: settings.model,
-            effort: settings.effort,
+            model: chosen.model,
+            effort: chosen.effort,
             context: opts?.context,
             patients: patients || undefined,
             adopt: c.adopt || undefined,
             resume: !c.chatId && c.resume ? c.resume : undefined,
           },
-          abort.signal
+          abort.signal,
+          b
         )) {
           driver.handle(ev);
           if (ev.type === 'done') break;
@@ -356,8 +412,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         if (!abort.signal.aborted) {
           status = 'error';
-          error = e instanceof ChatError ? e.message : `The connection to Copilot dropped (${e instanceof Error ? e.message : String(e)}).`;
-          if (e instanceof ChatError && e.code) void loadMe();
+          error =
+            e instanceof ChatError
+              ? e.message
+              : `The connection to ${b === 'foundry' ? 'Foundry' : 'Copilot'} dropped (${e instanceof Error ? e.message : String(e)}).`;
+          if (e instanceof ChatError && e.code) void loadMe(b);
         } else status = 'stopped';
       } finally {
         driver.finish(status, error);
@@ -367,13 +426,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         save(c, turn);
       }
     },
-    [ctxFor, label, render, save, settings.effort, settings.model, loadMe]
+    [ctxFor, label, render, save, settingsBy, loadMe]
   );
 
   const stop = useCallback(
     (surface: Surface) => {
       const c = convs.current[surface];
-      if (c.chatId) chatApi.stop(c.chatId).catch(() => undefined);
+      if (c.chatId) chatApi.stop(c.chatId, c.backend).catch(() => undefined);
       window.setTimeout(() => c.abort?.abort(), 1500);
       render();
     },
@@ -385,7 +444,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const c = convs.current[surface];
       if (c.busy) stop(surface);
       convs.current[surface] = {
-        ...newConversation(surface),
+        ...newConversation(surface, c.backend),
         patients: surface === 'ask' && !c.saved ? c.patients : [],
       };
       render();
@@ -418,7 +477,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const patients = [...p.patients];
     if (context && !patients.some((x) => x.id === context.patientId))
       patients.unshift({ id: context.patientId, name: context.patientName });
-    convs.current.ask = { ...p, surface: 'ask', adopt: true, patients };
+    // The side panel answers on Copilot, so its conversation continues in Ask (GHCP).
+    if (a.backend !== 'ghcp') {
+      parked.current[a.backend] = a;
+      setBackendState('ghcp');
+    }
+    convs.current.ask = { ...p, surface: 'ask', backend: 'ghcp', adopt: true, patients };
     convs.current.panel = newConversation('panel');
     setPanel({ open: false, context: null });
     render();
@@ -429,8 +493,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const a = convs.current.ask;
       if (a.busy) stop('ask');
       const { chat, turns } = await historyApi.getChat(id);
+      const b = savedBackend(chat.model);
+      if (a.backend !== b) parked.current[a.backend] = a;
+      delete parked.current[b];
       const c: Conversation = {
-        ...newConversation('ask'),
+        ...newConversation('ask', b),
         patients: chat.patients ?? [],
         saved: {
           id: chat.id,
@@ -465,7 +532,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         transcript: transcript(c.turns),
       };
       convs.current.ask = c;
+      setBackendState(b);
       render();
+      return b;
     },
     [ctxFor, label, render, stop]
   );
@@ -483,6 +552,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const value = useMemo<ChatState>(
     () => ({
       available: CHAT_AVAILABLE,
+      backend,
+      setBackend,
+      backends,
       me,
       meError,
       models,
@@ -505,6 +577,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       version,
     }),
     [
+      backend,
+      setBackend,
+      backends,
       me,
       meError,
       models,

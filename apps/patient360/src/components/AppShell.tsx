@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 
-import { ChatProvider } from '@/chat/ChatContext';
+import { ChatProvider, useChat } from '@/chat/ChatContext';
 import { SidePanel } from '@/chat/SidePanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Wordmark } from '@/components/Wordmark';
@@ -8,9 +8,11 @@ import { useAuth } from '@/hooks/AuthContext';
 import { CohortProvider } from '@/hooks/useCohort';
 import { LOCAL_DATA } from '@/lib/localMode';
 
-const TABS = [
+const TABS: { to: string; label: string; active: (p: string) => boolean; foundry?: boolean }[] = [
   { to: '/', label: 'Patients', active: (p: string) => p === '/' || p.startsWith('/p/') },
-  { to: '/ask', label: 'Ask', active: (p: string) => p.startsWith('/ask') },
+  { to: '/ask', label: 'Ask (GHCP)', active: (p: string) => p.startsWith('/ask') && !p.startsWith('/ask/foundry') },
+  // Shown only when the chat server has a Foundry deployment set up (FOUNDRY_ENDPOINT, FOUNDRY_MODELS).
+  { to: '/ask/foundry', label: 'Ask (Foundry)', active: (p: string) => p.startsWith('/ask/foundry'), foundry: true },
   { to: '/data', label: 'Where the data lives', active: (p: string) => p.startsWith('/data') },
   { to: '/sources', label: 'Sources', active: (p: string) => p.startsWith('/sources') },
 ];
@@ -22,12 +24,13 @@ const WORKSPACE_NAME = (import.meta.env.VITE_FABRIC_WORKSPACE_NAME as string | u
 function ShellHeader() {
   const { user, signOut } = useAuth();
   const { pathname } = useLocation();
+  const { backends } = useChat();
   return (
     <header className="hair shrink-0 border-b">
       <div className="flex h-14 items-center gap-8 px-5">
         <Wordmark compact />
         <nav className="flex h-full items-stretch gap-6" aria-label="Sections">
-          {TABS.map((t) => (
+          {TABS.filter((t) => !t.foundry || backends.includes('foundry')).map((t) => (
             <Link key={t.to} to={t.to} className={`tab ${t.active(pathname) ? 'active' : ''}`}>
               {t.label}
             </Link>

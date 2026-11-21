@@ -167,6 +167,15 @@ export function AccountLine({ compact = false }: { compact?: boolean }) {
       </p>
     );
   const me = chat.me;
+  if (chat.backend === 'foundry')
+    return me ? (
+      <div className="chat-who">
+        <span className="chat-who-k">Answers from</span>
+        <span className="chat-who-v">Microsoft Foundry</span>
+      </div>
+    ) : (
+      <p className="chat-note">{chat.meError ? `Foundry is not answering (${chat.meError}).` : 'Connecting to Foundry'}</p>
+    );
   if (!me)
     return chat.meError ? (
       <p className="chat-note">

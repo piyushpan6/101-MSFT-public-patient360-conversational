@@ -1,25 +1,29 @@
 import { PanelLeft } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { Answer } from '@/chat/Answer';
 import { useChat } from '@/chat/ChatContext';
 import { AccountLine, Composer, ModelPicker, PatientStrip, StarterButton } from '@/chat/Composer';
 import { History } from '@/chat/History';
 import { FOR_PATIENTS, ROLES } from '@/chat/starters';
-import { historyApi } from '@/chat/transport';
+import { historyApi, type Backend } from '@/chat/transport';
 import { searchPatients, str } from '@/lib/api';
 
 const ROLE_KEY = 'p360.role';
 const SIDE_KEY = 'p360.chat.side';
 
 /**
- * Ask: a conversation with GitHub Copilot about one patient, several, or all of them. Copilot reads the records
- * through the same functions the record uses, and answers with the record's own views as cards.
+ * Ask: a conversation about one patient, several, or all of them, answered by GitHub Copilot (Ask (GHCP)) or by a
+ * model in Microsoft Foundry (Ask (Foundry)). Both read the records through the same functions the record uses, and
+ * answer with the record's own views as cards.
  */
-export function Ask() {
+export function Ask({ backend = 'ghcp' }: { backend?: Backend }) {
   const chat = useChat();
+  const navigate = useNavigate();
+  useEffect(() => chat.setBackend(backend), [backend]); // eslint-disable-line react-hooks/exhaustive-deps
   const c = chat.conversation('ask');
+  const who = backend === 'foundry' ? 'Foundry' : 'GitHub Copilot';
   const [params, setParams] = useSearchParams();
   const [role, setRole] = useState(() => localStorage.getItem(ROLE_KEY) ?? ROLES[0].id);
   const [showStarters, setShowStarters] = useState(false);
@@ -131,12 +135,12 @@ export function Ask() {
       <div className="mx-auto flex min-h-full max-w-[1480px] flex-col px-8">
         <header className="ask-hero pt-8">
           <div className="t-label">Patient 360</div>
-          <h1 className="t-display mt-1 text-[40px]">Ask</h1>
+          <h1 className="t-display mt-1 text-[40px]">{backend === 'foundry' ? 'Ask (Foundry)' : 'Ask (GHCP)'}</h1>
           <p className="t-muted mt-3 text-[15px] leading-relaxed">
-            Ask GitHub Copilot about one patient, several together, or all 3,554. Copilot reads each record where it lives (Epic
-            Clarity, the PACS database, the documents lakehouse and the oncology research silos) and answers with the record's own views:
-            timelines, results over time, scans with the radiologists' outlines, slides, reports and tumour genomes. Each answer shows the
-            steps it took.
+            Ask {who} about one patient, several together, or all 3,554. {backend === 'foundry' ? 'The model' : 'Copilot'} reads each
+            record where it lives (Epic Clarity, the PACS database, the documents lakehouse and the oncology research silos) and answers
+            with the record's own views: timelines, results over time, scans with the radiologists' outlines, slides, reports and tumour
+            genomes. Each answer shows the steps it took.
           </p>
           <div className="ask-meta">
             <AccountLine />
@@ -151,7 +155,10 @@ export function Ask() {
         <div className={`ask-shell${historyApi.available ? '' : ' no-side'}${side ? '' : ' hs-hidden'}`}>
           {historyApi.available &&
             (side ? (
-              <History onHide={() => toggleSide(false)} />
+              <History
+                onHide={() => toggleSide(false)}
+                onOpened={(b) => b !== backend && navigate(b === 'foundry' ? '/ask/foundry' : '/ask')}
+              />
             ) : (
               <button type="button" className="hs-show" title="Show your chats" onClick={() => toggleSide(true)}>
                 <PanelLeft size={16} />
@@ -189,8 +196,9 @@ export function Ask() {
               </div>
               <Composer surface="ask" pickers={false} autoFocus onSent={() => ((stick.current = true), setShowStarters(false))} />
               <p className="ask-foot">
-                For demonstration, education and research only. Every patient is synthetic or a public, de-identified research case. Copilot
-                describes what the record shows; clinical decisions belong to the treating team.
+                For demonstration, education and research only. Every patient is synthetic or a public, de-identified research case.{' '}
+                {backend === 'foundry' ? 'The model' : 'Copilot'} describes what the record shows; clinical decisions belong to the treating
+                team.
               </p>
             </div>
           </div>

@@ -330,6 +330,9 @@ body.atlas .chat-box textarea:focus-visible { outline: none; }
 .hs-chev { transition: transform 0.25s var(--sc-ease); }
 .hs-folder.is-open > .hs-frow .hs-chev { transform: rotate(90deg); }
 .hs-n, .hs-when { flex: none; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* Which backend answered a saved chat: Ask (GHCP) or Ask (Foundry). */
+.hs-badge { flex: none; padding: 0 5px; border: 1px solid var(--hair, currentColor); border-radius: 3px; color: var(--ink-3); font-size: 10.5px; line-height: 16px; letter-spacing: 0.02em; }
+.hs-badge.is-foundry { color: var(--ink); border-color: var(--ink-3); }
 .hs-more { display: grid; place-items: center; flex: none; width: 24px; height: 24px; margin-left: 2px; border: 0; border-radius: 3px; background: none; color: var(--ink-3); cursor: pointer; opacity: 0; }
 .hs-row:hover .hs-more, .hs-row:focus-within .hs-more { opacity: 1; }
 .hs-more:hover { background: var(--line); color: var(--ink); }

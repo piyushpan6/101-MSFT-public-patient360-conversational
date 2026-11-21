@@ -28,9 +28,13 @@ async function chatTicket(force = false): Promise<{ value: string; relay: string
 
 const base = async () => (LOCAL_DATA ? '/chat-api' : `${(await chatTicket()).relay}/api`);
 
-async function headers(json = true): Promise<Record<string, string>> {
+/** Which model runtime answers: GitHub Copilot (Ask (GHCP)) or a Microsoft Foundry deployment (Ask (Foundry)). */
+export type Backend = 'ghcp' | 'foundry';
+
+async function headers(json = true, backend: Backend = 'ghcp'): Promise<Record<string, string>> {
   const h: Record<string, string> = json ? { 'Content-Type': 'application/json' } : {};
   if (!LOCAL_DATA) h['x-chat-ticket'] = (await chatTicket()).value;
+  if (backend === 'foundry') h['x-backend'] = 'foundry';
   return h;
 }
 
@@ -43,10 +47,10 @@ export class ChatError extends Error {
   }
 }
 
-async function call<T>(path: string, init?: RequestInit & { method?: string }): Promise<T> {
+async function call<T>(path: string, init?: RequestInit & { method?: string }, backend: Backend = 'ghcp'): Promise<T> {
   const res = await fetch(`${await base()}${path}`, {
     ...init,
-    headers: await headers(!!init?.body),
+    headers: await headers(!!init?.body, backend),
     credentials: LOCAL_DATA ? 'same-origin' : 'omit',
   });
   const data = (await res.json().catch(() => ({}))) as {
@@ -68,6 +72,7 @@ export type Me = {
   accounts?: Account[];
   github: { login: string; id?: string } | null;
   user?: string;
+  backend?: Backend;
 };
 export type Model = {
   id: string;
@@ -77,29 +82,39 @@ export type Model = {
 };
 
 export const chatApi = {
-  me: () => call<Me>('/me'),
+  me: (backend: Backend = 'ghcp') => call<Me>(backend === 'foundry' ? '/me?backend=foundry' : '/me', undefined, backend),
+  /** The backends this chat server offers (Foundry only when it is set up). */
+  backends: () => call<{ backends?: Backend[] }>('/health').then((r): Backend[] => r.backends ?? ['ghcp']),
   signin: (id: string) =>
     call<{ ok: boolean; login: string }>('/signin', {
       method: 'POST',
       body: JSON.stringify({ id }),
     }),
-  models: () =>
+  models: (backend: Backend = 'ghcp') =>
     call<{
       models: Model[];
       default: string | null;
       default_effort: string | null;
       login: string;
-    }>('/models'),
-  stop: (chatId: string) =>
-    call('/stop', {
-      method: 'POST',
-      body: JSON.stringify({ chat_id: chatId }),
-    }),
-  toolResult: (chatId: string, id: string, result: { ok: boolean; text?: string; error?: string }) =>
-    call('/tool-result', {
-      method: 'POST',
-      body: JSON.stringify({ chat_id: chatId, id, ...result }),
-    }),
+    }>('/models', undefined, backend),
+  stop: (chatId: string, backend: Backend = 'ghcp') =>
+    call(
+      '/stop',
+      {
+        method: 'POST',
+        body: JSON.stringify({ chat_id: chatId }),
+      },
+      backend
+    ),
+  toolResult: (chatId: string, id: string, result: { ok: boolean; text?: string; error?: string }, backend: Backend = 'ghcp') =>
+    call(
+      '/tool-result',
+      {
+        method: 'POST',
+        body: JSON.stringify({ chat_id: chatId, id, ...result }),
+      },
+      backend
+    ),
   /** Fabric: opens the relay's GitHub sign-in in a popup and resolves when it reports back. */
   async githubSignIn(): Promise<string | null> {
     // The window opens inside the click (popup blockers), then goes to the relay with a fresh ticket.
@@ -195,11 +210,11 @@ export type AskBody = {
 };
 
 /** One question: yields the server's events until the answer is done. */
-export async function* ask(body: AskBody, signal: AbortSignal): AsyncGenerator<ChatEvent> {
+export async function* ask(body: AskBody, signal: AbortSignal, backend: Backend = 'ghcp'): AsyncGenerator<ChatEvent> {
   const res = await fetch(`${await base()}/chat`, {
     method: 'POST',
     body: JSON.stringify(body),
-    headers: await headers(),
+    headers: await headers(true, backend),
     signal,
     credentials: LOCAL_DATA ? 'same-origin' : 'omit',
   });

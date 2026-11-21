@@ -7,8 +7,8 @@ import { ChevronRight, FolderPlus, MoreHorizontal, PanelLeftClose, Plus, Search 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-import { useChat } from '@/chat/ChatContext';
-import { historyApi, type SavedChat, type SavedFolder } from '@/chat/transport';
+import { savedBackend, useChat } from '@/chat/ChatContext';
+import { historyApi, type Backend, type SavedChat, type SavedFolder } from '@/chat/transport';
 
 const OPEN_KEY = 'p360.chat.folders';
 
@@ -107,7 +107,7 @@ function Rename({ value, onDone }: { value: string; onDone: (v: string | null) =
   );
 }
 
-export function History({ onHide }: { onHide: () => void }) {
+export function History({ onHide, onOpened }: { onHide: () => void; onOpened?: (b: Backend) => void }) {
   const chat = useChat();
   const current = chat.conversation('ask').saved?.id ?? null;
   const [data, setData] = useState<{
@@ -232,14 +232,23 @@ export function History({ onHide }: { onHide: () => void }) {
       tabIndex={0}
       role="button"
       title={c.title}
-      onClick={() => editing !== c.id && void chat.openSaved(c.id).catch((e) => setError(e instanceof Error ? e.message : String(e)))}
-      onKeyDown={(e) => e.key === 'Enter' && void chat.openSaved(c.id)}
+      onClick={() =>
+        editing !== c.id &&
+        void chat
+          .openSaved(c.id)
+          .then((b) => onOpened?.(b))
+          .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      }
+      onKeyDown={(e) => e.key === 'Enter' && void chat.openSaved(c.id).then((b) => onOpened?.(b))}
     >
       {editing === c.id ? (
         <Rename value={c.title} onDone={(v) => (setEditing(null), v && act(historyApi.updateChat(c.id, { title: v })))} />
       ) : (
         <span className="hs-title">{c.title}</span>
       )}
+      <span className={`hs-badge is-${savedBackend(c.model)}`} title={`Asked on ${savedBackend(c.model) === 'foundry' ? 'Foundry' : 'GitHub Copilot'}`}>
+        {savedBackend(c.model) === 'foundry' ? 'Foundry' : 'GHCP'}
+      </span>
       <span className="hs-when">{shortWhen(c.updated_at)}</span>
       <button
         type="button"
