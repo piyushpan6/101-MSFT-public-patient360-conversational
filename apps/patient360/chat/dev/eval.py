@@ -30,6 +30,7 @@ from cases import CASES  # noqa: E402
 BASE = "http://localhost:5178"
 # --backend foundry asks on the Ask (Foundry) tab (side panel cases stay on Copilot, as the app does).
 ASK_PATH = "/ask"
+PICK: dict = {}  # --model / --effort
 TURN_TIMEOUT = 420
 WHOLE = False
 
@@ -271,6 +272,9 @@ async def run_case(browser, case: dict, out: Path, sem: asyncio.Semaphore) -> di
         theme = case.get("theme", "light")
         ctx = await browser.new_context(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
         await ctx.add_init_script(f"try{{localStorage.setItem('p360.theme','{theme}');localStorage.setItem('p360.chat.history','0')}}catch(e){{}}")
+        if PICK:  # --model / --effort: the tab's saved choice (Ask (Foundry) keeps its own, p360.chat.foundry)
+            key = "p360.chat.foundry" if ASK_PATH.endswith("foundry") else "p360.chat"
+            await ctx.add_init_script(f"try{{localStorage.setItem('{key}', {json.dumps(json.dumps(PICK))})}}catch(e){{}}")
         await ctx.add_init_script(CAPTURE)
         await sign_in(ctx)
         page = await ctx.new_page()
@@ -373,10 +377,13 @@ async def main() -> None:
                     help="draw WebGL on the Mac's GPU (Metal); the tractography and fluorescence slides need it")
     ap.add_argument("--backend", choices=["ghcp", "foundry"], default="ghcp",
                     help="the Ask tab to ask on: Ask (GHCP) or Ask (Foundry)")
+    ap.add_argument("--model", default="", help="the model to ask with (default: the tab's default)")
+    ap.add_argument("--effort", default="", help="the thinking level (low, medium, high)")
     a = ap.parse_args()
-    global WHOLE, ASK_PATH
+    global WHOLE, ASK_PATH, PICK
     WHOLE = a.answers
     ASK_PATH = "/ask/foundry" if a.backend == "foundry" else "/ask"
+    PICK = {k: v for k, v in (("model", a.model), ("effort", a.effort)) if v}
     pick = [s for s in a.only.split(",") if s]
     cases = [c for c in CASES if not pick or any(c["id"] == p or c["id"].startswith(p) for p in pick)]
     out = Path(a.out)

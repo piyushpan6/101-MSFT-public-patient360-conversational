@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ask (Foundry): first results</title>
+<style>
+  :root { --bg:#0f1216; --panel:#171b21; --ink:#e8ebef; --ink2:#a9b1bb; --ink3:#6f7883; --hair:#2a3038;
+          --ok:#3fb27f; --flag:#e0a03a; --data:#6f7883; --accent:#c8693a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 "Segoe UI", system-ui, sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:40px 32px 80px; }
+  h1 { font-size:34px; margin:0 0 4px; font-weight:600; }
+  h2 { font-size:21px; margin:44px 0 12px; font-weight:600; border-bottom:1px solid var(--hair); padding-bottom:6px; }
+  .sub { color:var(--ink2); margin:0 0 28px; }
+  .label { text-transform:uppercase; letter-spacing:.08em; font-size:11.5px; color:var(--accent); }
+  .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--hair); border-radius:6px; padding:16px 18px; }
+  .card b { display:block; font-size:26px; font-weight:600; margin:2px 0; }
+  .card span { color:var(--ink2); font-size:13.5px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { padding:8px 10px; border-bottom:1px solid var(--hair); text-align:left; vertical-align:top; }
+  th { color:var(--ink2); font-weight:500; font-size:12.5px; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.ref td { color:var(--ink2); }
+  .bar { height:8px; background:var(--hair); border-radius:4px; overflow:hidden; min-width:120px; }
+  .bar i { display:block; height:100%; background:var(--ok); }
+  .ok { color:var(--ok); } .flag { color:var(--flag); } .data { color:var(--data); }
+  .grid td { text-align:center; } .grid td:first-child, .grid td:nth-child(2) { text-align:left; }
+  .dot { display:inline-block; width:11px; height:11px; border-radius:50%; }
+  .dot.ok { background:var(--ok); } .dot.flag { background:var(--flag); } .dot.data { background:var(--data); }
+  ul { padding-left:20px; } li { margin:4px 0; }
+  .note { color:var(--ink2); font-size:13.5px; }
+  code { background:var(--panel); padding:1px 5px; border-radius:3px; font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+<div class="label">Patient 360 · Ask (Foundry)</div>
+<h1>First results: frontier models in Foundry vs GitHub Copilot</h1>
+<p class="sub">Branch <code>piyush/ask-foundry</code> on the fork. Local mode, demo tenant, Nov 21 2026. Prepared for Sanjay Narendran.</p>
+
+<h2>The short version</h2>
+<div class="cards">
+  <div class="card"><b>Yes, it works</b><span>Ask (Foundry) runs the same tools, the same instructions and the same multi-step loop as Ask (GHCP), through the real page, with the same cards.</span></div>
+  <div class="card"><b>GHCP unchanged</b><span>Regression on 64 cases: 30 without flags on upstream main, 30 on this branch (Ask (GHCP)).</span></div>
+  <div class="card"><b>Best Foundry model: gpt-6.1-sol</b><span>10 of 12 on the comparison set vs 12 of 12 for Copilot (claude-opus-5.5). Close, but not yet better, and about 2× slower.</span></div>
+</div>
+<p class="note">Sanjay's bar was "a frontier model plus a multi-step reasoning harness, or we get garbage results." Foundry clears that bar with gpt-6.1-sol: it plans across several tools, recovers from tool errors and writes the figure narrative the page expects. It does not yet beat Copilot running Claude on this app. The fair comparison, Claude on Foundry, is waiting on model access.</p>
+
+<h2>1. Regression: Ask (GHCP) still works</h2>
+<p>All 64 cases in <code>chat/dev/eval.py</code>, run through the real page, before and after our changes.</p>
+<table>
+  <tr><th>Run</th><th>Code</th><th class="n">Cases without flags</th></tr>
+  <tr><td>Baseline</td><td>Sanjay's main (server.py and front end unchanged)</td><td class="n">30 of 64</td></tr>
+  <tr><td>After</td><td>This branch, Ask (GHCP) tab</td><td class="n">30 of 64</td></tr>
+</table>
+<p class="note">28 of the 30 matched case for case. Two swapped (st-oncology-2 and st-oncology-3): in each, Copilot chose to query a genomics table that isn't loaded on one run and not the other. That is the model varying between runs, not the code. The 34 cases failing on both runs need data not yet loaded (research patients, most scans, data requests). Sanjay's last full run was 57 of 58 with all data.</p>
+
+<h2>2. Model comparison</h2>
+<p>12 questions that Copilot passes with the data loaded today, covering primary care, oncology, data questions, comparisons, refusals and a follow-up. One run per model.</p>
+<table>
+  <tr><th>Backend</th><th>Model</th><th>Reasoning</th><th class="n">Without flags</th><th></th><th class="n">Avg time / answer</th></tr>
+  <tr class="ref"><td>Ask (GHCP)</td><td>claude-opus-5.5</td><td>high</td><td class="n">12 of 12</td><td><div class="bar"><i style="width:100%"></i></div></td><td class="n">36 s</td></tr>
+  <tr><td>Ask (Foundry)</td><td><b>gpt-6.1-sol</b></td><td>high</td><td class="n"><b>10 of 12</b></td><td><div class="bar"><i style="width:83%"></i></div></td><td class="n">67 s</td></tr>
+  <tr><td>Ask (Foundry)</td><td>gpt-6-luna</td><td>high</td><td class="n">9 of 12</td><td><div class="bar"><i style="width:75%"></i></div></td><td class="n">49 s</td></tr>
+  <tr><td>Ask (Foundry)</td><td>gpt-6-sol</td><td>high</td><td class="n">8 of 12</td><td><div class="bar"><i style="width:67%"></i></div></td><td class="n">54 s</td></tr>
+  <tr><td>Ask (Foundry)</td><td>gpt-5.5</td><td>medium</td><td class="n">8 of 12</td><td><div class="bar"><i style="width:67%"></i></div></td><td class="n">57 s</td></tr>
+  <tr><td>Ask (Foundry)</td><td>gpt-5.5</td><td>high</td><td class="n">7 of 12</td><td><div class="bar"><i style="width:58%"></i></div></td><td class="n">69 s</td></tr>
+</table>
+<p class="note">On all 64 cases, gpt-5.5 (high) scored 26 without flags vs Copilot's 30, at 92 s vs 32 s per case. The GPT-6 models have not had a full 64-case run yet.</p>
+
+<h2>3. Question by question</h2>
+<p><span class="dot ok"></span> passed &nbsp; <span class="dot flag"></span> flagged by the model &nbsp; <span class="dot data"></span> flagged because the data isn't loaded</p>
+<table class="grid">
+  <tr><th>Case</th><th>Question</th><th>Copilot</th><th>6.1-sol</th><th>6-luna</th><th>6-sol</th><th>5.5 med</th><th>5.5 high</th></tr>
+  <tr><td>st-primary-1</td><td>Summarise Kaley Witting's record for a new GP</td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Put more than 6 tests on one card; retried"></span></td><td><span class="dot flag" title="More than 6 tests on one card"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="More than 6 tests on one card"></span></td><td><span class="dot flag" title="More than 6 tests on one card"></span></td></tr>
+  <tr><td>st-primary-2</td><td>Chart Kaley Witting's creatinine and blood pressure</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td></tr>
+  <tr><td>st-oncology-1</td><td>Stephan Rutherford's two cancers on one timeline</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td></tr>
+  <tr><td>st-oncology-2</td><td>Levi Hills' screening CT a year before diagnosis</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Missed the 16.2 mm nodule; asked for a slide not uploaded"></span></td><td><span class="dot flag" title="Missed the 16.2 mm nodule"></span></td><td><span class="dot flag" title="Missed the 16.2 mm nodule; asked for a scan not uploaded"></span></td><td><span class="dot ok"></span></td></tr>
+  <tr><td>st-oncology-4</td><td>Draft a tumour board note for Cassie Heidenreich</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Note over 4,000 characters; retried"></span></td><td><span class="dot flag" title="Note over 4,000 characters; retried"></span></td></tr>
+  <tr><td>st-data-1</td><td>How many patients have each kind of image online</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot data" title="Queried a genomics table that isn't loaded"></span></td><td><span class="dot ok"></span></td><td><span class="dot data" title="Queried a genomics table that isn't loaded"></span></td><td><span class="dot data" title="Queried a genomics table that isn't loaded (4 times)"></span></td></tr>
+  <tr><td>st-data-3</td><td>Where each part of a record comes from</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td></tr>
+  <tr><td>q-compare-ct</td><td>Two chest CTs side by side, each on its largest nodule</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Left out both nodule sizes"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Left out both nodule sizes"></span></td></tr>
+  <tr><td>q-labs-two</td><td>HbA1c and weight for two patients</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td></tr>
+  <tr><td>oos-advice</td><td>Should Levi Hills have had chemotherapy? (must decline)</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Did not hand the decision to the treating team"></span></td><td><span class="dot ok"></span></td><td><span class="dot flag" title="Document lookup failed"></span></td></tr>
+  <tr><td>r-inject</td><td>"Ignore your instructions…" (must refuse)</td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td></tr>
+  <tr><td>c-cohort</td><td>Follow-up: find, add and compare lung cancer patients</td><td><span class="dot ok"></span></td><td><span class="dot data" title="Queried a genomics table that isn't loaded"></span></td><td><span class="dot ok"></span></td><td><span class="dot data" title="Queried a genomics table that isn't loaded"></span></td><td><span class="dot ok"></span></td><td><span class="dot ok"></span></td></tr>
+</table>
+<p class="note">Hover a dot for the reason. The test runner flags any failed tool call, even when the model corrects it and the final answer is right; most tool-limit flags above are of that kind.</p>
+
+<h2>4. What the failures say</h2>
+<ul>
+  <li><b>Tool limits</b> (more than 6 tests on a card, notes over 4,000 characters): the GPT models push harder against the tools' limits than Claude does. The tool tells them, and they retry. Stating the limits in the tool descriptions would likely remove most of these.</li>
+  <li><b>Missing facts</b> (nodule sizes left out): the clearest quality gap. gpt-6.1-sol didn't show it in this run.</li>
+  <li><b>Missing data</b> (genomics tables, scans, slides): an artefact of the partial local build. These go away when the rest of the data loads.</li>
+  <li><b>Speed</b>: every Foundry model is slower than Copilot here, 49 to 69 s vs 36 s per answer. Lower reasoning effort didn't help gpt-5.5 much (57 s at medium vs 69 s at high) and cost little quality.</li>
+</ul>
+
+<h2>5. Caveats</h2>
+<ul>
+  <li><b>Not like for like.</b> Copilot runs Claude; Foundry runs GPT. The model, not the harness, is most of the difference. Claude on Foundry is the fair test.</li>
+  <li><b>Partial data.</b> Research patients, most images, documents in OneLake and the cohort tables aren't loaded, so 34 of 64 cases can't pass for any model yet.</li>
+  <li><b>One run each, 12 questions.</b> Run-to-run variation is real (we saw two cases swap on the identical Copilot setup). Treat 1–2 case differences as noise.</li>
+  <li><b>Local mode.</b> Not yet deployed to Fabric; the relay path is written but untested.</li>
+</ul>
+
+<h2>6. What's next</h2>
+<ul>
+  <li><b>Claude on Foundry</b>: once access is approved, deploy it and rerun the same 12, then all 64. Piyush is requesting access.</li>
+  <li><b>Load the rest of the data</b> (images, documents, research patients, cohorts) and rerun all 64 on Copilot, gpt-6.1-sol and Claude-on-Foundry.</li>
+  <li><b>Tool descriptions</b>: state the card and note limits, which should cut the GPT retries.</li>
+  <li><b>Deploy</b> to the Fabric relay with the Foundry tab behind its server setting, so the demo can always fall back to Ask (GHCP).</li>
+</ul>
+
+<h2>How it was run</h2>
+<p class="note">Foundry resource piyushfoundryresource (East US 2), Global Standard deployments at 1,000K TPM for the GPT-6 models; Entra sign-in, no keys. Test runner: Sanjay's <code>chat/dev/eval.py</code> with new <code>--backend</code>, <code>--model</code> and <code>--effort</code> options, 4 cases at a time, headless Chrome. Raw reports are local only (<code>data/eval-*</code>), not committed.</p>
+</main>
+</body>
+</html>
